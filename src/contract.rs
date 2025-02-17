@@ -1,11 +1,13 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint256};
+use cosmwasm_std::{
+    to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint256,
+};
 // use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, PalomaMsg, QueryMsg};
-use crate::state::{State, STATE};
+use crate::state::{State, RELEASES, STATE};
 
 /*
 // version info for migration info
@@ -24,7 +26,6 @@ pub fn instantiate(
         retry_delay: msg.retry_delay,
         job_id: msg.job_id.clone(),
         owner: info.sender.clone(),
-        release_nonce: 0u128,
     };
     STATE.save(deps.storage, &state)?;
     Ok(Response::new()
@@ -76,8 +77,8 @@ pub mod execute {
     use super::*;
     use crate::{
         msg::{ExecuteJob, SwapInfo},
-        state::{NONCE, WITHDRAW_TIMESTAMP},
-        ContractError::{AllPending, Unauthorized},
+        state::{RELEASES, WITHDRAW_TIMESTAMP},
+        ContractError::{AllPending, InvalidNonce, Unauthorized},
     };
     use cosmwasm_std::CosmosMsg;
     use ethabi::{Address, Contract, Function, Param, ParamType, StateMutability, Token, Uint};
@@ -320,7 +321,10 @@ pub mod execute {
             return Err(Unauthorized {});
         }
         let recipient_address: Address = Address::from_str(recipient.as_str()).unwrap();
-        NONCE.save(
+        if RELEASES.has(deps.storage, &nonce.to_be_bytes()) {
+            return Err(InvalidNonce {});
+        }
+        RELEASES.save(
             deps.storage,
             &nonce.to_be_bytes(),
             &(recipient.clone(), amount),
@@ -394,7 +398,7 @@ pub mod execute {
         if state.owner != info.sender {
             return Err(Unauthorized {});
         }
-        let (recipient, amount) = NONCE.load(deps.storage, &nonce.to_be_bytes())?;
+        let (recipient, amount) = RELEASES.load(deps.storage, &nonce.to_be_bytes())?;
         let recipient_address: Address = Address::from_str(recipient.as_str()).unwrap();
         #[allow(deprecated)]
         let contract: Contract = Contract {
@@ -724,8 +728,13 @@ pub mod execute {
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
-pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
-    unimplemented!()
+pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+    match msg {
+        QueryMsg::GetState {} => to_json_binary(&STATE.load(deps.storage)?),
+        QueryMsg::GetRelease { nonce } => {
+            to_json_binary(&RELEASES.load(deps.storage, &nonce.to_be_bytes())?)
+        }
+    }
 }
 
 #[cfg(test)]

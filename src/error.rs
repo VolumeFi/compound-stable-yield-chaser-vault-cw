@@ -11,4 +11,7 @@ pub enum ContractError {
 
     #[error("AllPending")]
     AllPending {},
+
+    #[error("InvalidNonce")]
+    InvalidNonce {},
 }
