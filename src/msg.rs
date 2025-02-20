@@ -33,9 +33,6 @@ pub enum ExecuteMsg {
         amount: Uint256,
         nonce: Uint256,
     },
-    ReRelease {
-        nonce: Uint256,
-    },
     SetPaloma {},
     UpdateCompass {
         new_compass: String,
@@ -62,8 +59,6 @@ pub enum ExecuteMsg {
 pub enum QueryMsg {
     #[returns(State)]
     GetState {},
-    #[returns((String, Uint256))]
-    GetRelease { nonce: Uint256 },
 }
 
 #[cw_serde]

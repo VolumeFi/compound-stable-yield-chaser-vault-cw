@@ -7,7 +7,7 @@ use cosmwasm_std::{
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, PalomaMsg, QueryMsg};
-use crate::state::{State, RELEASES, STATE};
+use crate::state::{State, STATE};
 
 /*
 // version info for migration info
@@ -51,8 +51,7 @@ pub fn execute(
             recipient,
             amount,
             nonce,
-        } => execute::release_bobby(deps, info, recipient, amount, nonce),
-        ExecuteMsg::ReRelease { nonce } => execute::rerelease_bobby(deps, info, nonce),
+        } => execute::release_bobby(deps, env, info, recipient, amount, nonce),
         ExecuteMsg::SetPaloma {} => execute::set_paloma(deps, info),
         ExecuteMsg::UpdateCompass { new_compass } => {
             execute::update_compass(deps, info, new_compass)
@@ -77,8 +76,8 @@ pub mod execute {
     use super::*;
     use crate::{
         msg::{ExecuteJob, SwapInfo},
-        state::{RELEASES, WITHDRAW_TIMESTAMP},
-        ContractError::{AllPending, InvalidNonce, Unauthorized},
+        state::WITHDRAW_TIMESTAMP,
+        ContractError::{AllPending, Unauthorized},
     };
     use cosmwasm_std::CosmosMsg;
     use ethabi::{Address, Contract, Function, Param, ParamType, StateMutability, Token, Uint};
@@ -311,6 +310,7 @@ pub mod execute {
 
     pub fn release_bobby(
         deps: DepsMut,
+        env: Env,
         info: MessageInfo,
         recipient: String,
         amount: Uint256,
@@ -321,13 +321,21 @@ pub mod execute {
             return Err(Unauthorized {});
         }
         let recipient_address: Address = Address::from_str(recipient.as_str()).unwrap();
-        if RELEASES.has(deps.storage, &nonce.to_be_bytes()) {
-            return Err(InvalidNonce {});
-        }
-        RELEASES.save(
+        if let Some(timestamp) = WITHDRAW_TIMESTAMP.may_load(
             deps.storage,
-            &nonce.to_be_bytes(),
-            &(recipient.clone(), amount),
+            ("release_bobby".to_string(), nonce.to_string()),
+        )? {
+            if timestamp
+                .plus_seconds(state.retry_delay)
+                .gt(&env.block.time)
+            {
+                return Err(AllPending {});
+            }
+        }
+        WITHDRAW_TIMESTAMP.save(
+            deps.storage,
+            ("release_bobby".to_string(), nonce.to_string()),
+            &env.block.time,
         )?;
         #[allow(deprecated)]
         let contract: Contract = Contract {
@@ -383,77 +391,6 @@ pub mod execute {
             }))
             .add_attributes(vec![
                 ("action", "release_bobby"),
-                ("recipient", &recipient),
-                ("amount", &amount.to_string()),
-                ("nonce", &nonce.to_string()),
-            ]))
-    }
-
-    pub fn rerelease_bobby(
-        deps: DepsMut,
-        info: MessageInfo,
-        nonce: Uint256,
-    ) -> Result<Response<PalomaMsg>, ContractError> {
-        let state = STATE.load(deps.storage)?;
-        if state.owner != info.sender {
-            return Err(Unauthorized {});
-        }
-        let (recipient, amount) = RELEASES.load(deps.storage, &nonce.to_be_bytes())?;
-        let recipient_address: Address = Address::from_str(recipient.as_str()).unwrap();
-        #[allow(deprecated)]
-        let contract: Contract = Contract {
-            constructor: None,
-            functions: BTreeMap::from_iter(vec![(
-                "release_bobby".to_string(),
-                vec![Function {
-                    name: "release_bobby".to_string(),
-                    inputs: vec![
-                        Param {
-                            name: "recipient".to_string(),
-                            kind: ParamType::Address,
-                            internal_type: None,
-                        },
-                        Param {
-                            name: "amount".to_string(),
-                            kind: ParamType::Uint(256),
-                            internal_type: None,
-                        },
-                        Param {
-                            name: "nonce".to_string(),
-                            kind: ParamType::Uint(256),
-                            internal_type: None,
-                        },
-                    ],
-                    outputs: Vec::new(),
-                    constant: None,
-                    state_mutability: StateMutability::NonPayable,
-                }],
-            )]),
-            events: BTreeMap::new(),
-            errors: BTreeMap::new(),
-            receive: false,
-            fallback: false,
-        };
-
-        Ok(Response::new()
-            .add_message(CosmosMsg::Custom(PalomaMsg::SchedulerMsg {
-                execute_job: ExecuteJob {
-                    job_id: state.job_id,
-                    payload: Binary::new(
-                        contract
-                            .function("release_bobby")
-                            .unwrap()
-                            .encode_input(&[
-                                Token::Address(recipient_address),
-                                Token::Uint(Uint::from_big_endian(&amount.to_be_bytes())),
-                                Token::Uint(Uint::from_big_endian(&nonce.to_be_bytes())),
-                            ])
-                            .unwrap(),
-                    ),
-                },
-            }))
-            .add_attributes(vec![
-                ("action", "rerelease_bobby"),
                 ("recipient", &recipient),
                 ("amount", &amount.to_string()),
                 ("nonce", &nonce.to_string()),
@@ -731,9 +668,6 @@ pub mod execute {
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetState {} => to_json_binary(&STATE.load(deps.storage)?),
-        QueryMsg::GetRelease { nonce } => {
-            to_json_binary(&RELEASES.load(deps.storage, &nonce.to_be_bytes())?)
-        }
     }
 }
 
