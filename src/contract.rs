@@ -18,7 +18,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
@@ -26,6 +26,7 @@ pub fn instantiate(
         retry_delay: msg.retry_delay,
         job_id: msg.job_id.clone(),
         owner: info.sender.clone(),
+        denom: "factory/".to_string() + env.contract.address.as_str() + "/ubobby",
     };
     STATE.save(deps.storage, &state)?;
     Ok(Response::new()
@@ -46,6 +47,10 @@ pub fn execute(
             new_c_asset,
             swap_info,
         } => execute::change_asset(deps, env, info, new_c_asset, swap_info),
+        ExecuteMsg::CreateBobby {
+            compass_job_id,
+            blueprint,
+        } => execute::create_bobby(deps, env, info, compass_job_id, blueprint),
         ExecuteMsg::SetBobby { bobby } => execute::set_bobby(deps, info, bobby),
         ExecuteMsg::ReleaseBobby {
             recipient,
@@ -75,11 +80,11 @@ pub fn execute(
 pub mod execute {
     use super::*;
     use crate::{
-        msg::{ExecuteJob, SwapInfo},
+        msg::{CreateDenomMsg, ExecuteJob, Metadata, MintMsg, SendTx, SetErc20ToDenom, SwapInfo},
         state::WITHDRAW_TIMESTAMP,
         ContractError::{AllPending, Unauthorized},
     };
-    use cosmwasm_std::CosmosMsg;
+    use cosmwasm_std::{CosmosMsg, DenomUnit, Uint128};
     use ethabi::{Address, Contract, Function, Param, ParamType, StateMutability, Token, Uint};
     use std::collections::BTreeMap;
     use std::str::FromStr;
@@ -178,6 +183,121 @@ pub mod execute {
         }
     }
 
+    pub fn create_bobby(
+        deps: DepsMut,
+        _env: Env,
+        info: MessageInfo,
+        compass_job_id: String,
+        blueprint: String,
+    ) -> Result<Response<PalomaMsg>, ContractError> {
+        let state = STATE.load(deps.storage)?;
+        if state.owner != info.sender {
+            return Err(Unauthorized {});
+        }
+        let denom = state.denom.clone();
+        let token_name = "BOBBYBOND".to_string();
+        let token_symbol = "BOBBY".to_string();
+        let token_description = "Bobby Fleshner AI Bond Token".to_string();
+        let token_decimals: u32 = 6;
+        let metadata: Metadata = Metadata {
+            description: token_description,
+            denom_units: vec![
+                DenomUnit {
+                    denom: denom.clone(),
+                    exponent: 0,
+                    aliases: vec![],
+                },
+                DenomUnit {
+                    denom: token_symbol.to_string(),
+                    exponent: token_decimals,
+                    aliases: vec![],
+                },
+            ],
+            name: token_name.clone(),
+            symbol: token_symbol.clone(),
+            base: denom.clone(),
+            display: token_symbol.clone(),
+        };
+        let mut messages: Vec<CosmosMsg<PalomaMsg>> = Vec::new();
+        messages.push(CosmosMsg::Custom(PalomaMsg::TokenFactoryMsg {
+            create_denom: Some(CreateDenomMsg {
+                subdenom: "ubobby".to_string(),
+                metadata: metadata.clone(),
+            }),
+            mint_tokens: None,
+        }));
+
+        #[allow(deprecated)]
+        let contract: Contract = Contract {
+            constructor: None,
+            functions: BTreeMap::from_iter(vec![(
+                "deploy_erc20".to_string(),
+                vec![Function {
+                    name: "deploy_erc20".to_string(),
+                    inputs: vec![
+                        Param {
+                            name: "_paloma_denom".to_string(),
+                            kind: ParamType::String,
+                            internal_type: None,
+                        },
+                        Param {
+                            name: "_name".to_string(),
+                            kind: ParamType::String,
+                            internal_type: None,
+                        },
+                        Param {
+                            name: "_symbol".to_string(),
+                            kind: ParamType::String,
+                            internal_type: None,
+                        },
+                        Param {
+                            name: "_decimals".to_string(),
+                            kind: ParamType::Uint(8),
+                            internal_type: None,
+                        },
+                        Param {
+                            name: "_blueprint".to_string(),
+                            kind: ParamType::Address,
+                            internal_type: None,
+                        },
+                    ],
+                    outputs: Vec::new(),
+                    constant: None,
+                    state_mutability: StateMutability::NonPayable,
+                }],
+            )]),
+            events: BTreeMap::new(),
+            errors: BTreeMap::new(),
+            receive: false,
+            fallback: false,
+        };
+        let tokens = &[
+            Token::String(denom.clone()),
+            Token::String(token_name.clone()),
+            Token::String(token_symbol.clone()),
+            Token::Uint(Uint::from(token_decimals)),
+            Token::Address(Address::from_str(blueprint.as_str()).unwrap()),
+        ];
+        messages.push(CosmosMsg::Custom(PalomaMsg::SchedulerMsg {
+            execute_job: ExecuteJob {
+                job_id: compass_job_id,
+                payload: Binary::new(
+                    contract
+                        .function("deploy_erc20")
+                        .unwrap()
+                        .encode_input(tokens)
+                        .unwrap(),
+                ),
+            },
+        }));
+        Ok(Response::new()
+            .add_messages(messages)
+            .add_attribute("action", "create_bobby")
+            .add_attribute("denom", denom)
+            .add_attribute("token_name", token_name)
+            .add_attribute("token_symbol", token_symbol))
+    }
+
     fn get_change_asset_tokens(new_asset: String, swap_info: SwapInfo) -> Vec<Token> {
         let token_new_asset: Token = Token::Address(Address::from_str(new_asset.as_str()).unwrap());
         let mut token_swap_info: Vec<Token> = Vec::new();
@@ -268,6 +388,16 @@ pub mod execute {
         if state.owner != info.sender {
             return Err(Unauthorized {});
         }
+        let mut messages: Vec<CosmosMsg<PalomaMsg>> = Vec::new();
+        messages.push(CosmosMsg::Custom(PalomaMsg::SkywayMsg {
+            set_erc20_to_denom: Some(SetErc20ToDenom {
+                erc20_address: bobby.clone(),
+                token_denom: state.denom,
+                chain_reference_id: "arbitrum-main".to_string(),
+            }),
+            send_tx: None,
+        }));
+
         let bobby_address: Address = Address::from_str(bobby.as_str()).unwrap();
         #[allow(deprecated)]
         let contract: Contract = Contract {
@@ -292,19 +422,21 @@ pub mod execute {
             fallback: false,
         };
 
+        messages.push(CosmosMsg::Custom(PalomaMsg::SchedulerMsg {
+            execute_job: ExecuteJob {
+                job_id: state.job_id,
+                payload: Binary::new(
+                    contract
+                        .function("set_bobby")
+                        .unwrap()
+                        .encode_input(&[Token::Address(bobby_address)])
+                        .unwrap(),
+                ),
+            },
+        }));
+
         Ok(Response::new()
-            .add_message(CosmosMsg::Custom(PalomaMsg::SchedulerMsg {
-                execute_job: ExecuteJob {
-                    job_id: state.job_id,
-                    payload: Binary::new(
-                        contract
-                            .function("set_bobby")
-                            .unwrap()
-                            .encode_input(&[Token::Address(bobby_address)])
-                            .unwrap(),
-                    ),
-                },
-            }))
+            .add_messages(messages)
             .add_attribute("action", "set_bobby"))
     }
 
@@ -321,6 +453,7 @@ pub mod execute {
             return Err(Unauthorized {});
         }
         let recipient_address: Address = Address::from_str(recipient.as_str()).unwrap();
+        let mut messages: Vec<CosmosMsg<PalomaMsg>> = Vec::new();
         if let Some(timestamp) = WITHDRAW_TIMESTAMP.may_load(
             deps.storage,
             ("release_bobby".to_string(), nonce.to_string()),
@@ -331,6 +464,23 @@ pub mod execute {
             {
                 return Err(AllPending {});
             }
+        } else {
+            messages.push(CosmosMsg::Custom(PalomaMsg::TokenFactoryMsg {
+                create_denom: None,
+                mint_tokens: Some(MintMsg {
+                    denom: state.denom.clone(),
+                    amount: Uint128::try_from(amount).unwrap(),
+                    mint_to_address: env.contract.address.to_string(),
+                }),
+            }));
+            messages.push(CosmosMsg::Custom(PalomaMsg::SkywayMsg {
+                set_erc20_to_denom: None,
+                send_tx: Some(SendTx {
+                    remote_chain_destination_address: recipient.clone(),
+                    amount: Uint128::try_from(amount).unwrap(),
+                    chain_reference_id: "arbitrum-main".to_string(),
+                }),
+            }));
         }
         WITHDRAW_TIMESTAMP.save(
             deps.storage,

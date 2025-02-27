@@ -9,6 +9,7 @@ pub struct State {
     pub retry_delay: u64,
     pub job_id: String,
     pub owner: Addr,
+    pub denom: String,
 }
 
 pub const WITHDRAW_TIMESTAMP: Map<(String, String), Timestamp> = Map::new("withdraw_timestamp");
