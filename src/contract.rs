@@ -521,30 +521,28 @@ pub mod execute {
             receive: false,
             fallback: false,
         };
-
-        Ok(Response::new()
-            .add_message(CosmosMsg::Custom(PalomaMsg::SchedulerMsg {
-                execute_job: ExecuteJob {
-                    job_id: state.job_id,
-                    payload: Binary::new(
-                        contract
-                            .function("release_bobby")
-                            .unwrap()
-                            .encode_input(&[
-                                Token::Address(recipient_address),
-                                Token::Uint(Uint::from_big_endian(&amount.to_be_bytes())),
-                                Token::Uint(Uint::from_big_endian(&nonce.to_be_bytes())),
-                            ])
-                            .unwrap(),
-                    ),
-                },
-            }))
-            .add_attributes(vec![
-                ("action", "release_bobby"),
-                ("recipient", &recipient),
-                ("amount", &amount.to_string()),
-                ("nonce", &nonce.to_string()),
-            ]))
+        messages.push(CosmosMsg::Custom(PalomaMsg::SchedulerMsg {
+            execute_job: ExecuteJob {
+                job_id: state.job_id,
+                payload: Binary::new(
+                    contract
+                        .function("release_bobby")
+                        .unwrap()
+                        .encode_input(&[
+                            Token::Address(recipient_address),
+                            Token::Uint(Uint::from_big_endian(&amount.to_be_bytes())),
+                            Token::Uint(Uint::from_big_endian(&nonce.to_be_bytes())),
+                        ])
+                        .unwrap(),
+                ),
+            },
+        }));
+        Ok(Response::new().add_messages(messages).add_attributes(vec![
+            ("action", "release_bobby"),
+            ("recipient", &recipient),
+            ("amount", &amount.to_string()),
+            ("nonce", &nonce.to_string()),
+        ]))
     }
 
     pub fn update_compass(
