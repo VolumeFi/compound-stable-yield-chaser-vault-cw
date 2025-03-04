@@ -477,7 +477,7 @@ pub mod execute {
                 set_erc20_to_denom: None,
                 send_tx: Some(SendTx {
                     remote_chain_destination_address: recipient.clone(),
-                    amount: Uint128::try_from(amount).unwrap(),
+                    amount: amount.to_string() + state.denom.clone().as_str(),
                     chain_reference_id: "arbitrum-main".to_string(),
                 }),
             }));
@@ -818,6 +818,3 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetState {} => to_json_binary(&STATE.load(deps.storage)?),
     }
 }
-
-#[cfg(test)]
-mod tests {}
