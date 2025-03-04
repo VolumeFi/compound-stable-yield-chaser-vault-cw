@@ -113,7 +113,7 @@ pub struct MintMsg {
 #[cw_serde]
 pub struct SendTx {
     pub remote_chain_destination_address: String,
-    pub amount: Uint128,
+    pub amount: String,
     pub chain_reference_id: String,
 }
 
